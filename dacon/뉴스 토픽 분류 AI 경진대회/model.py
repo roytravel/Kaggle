@@ -9,6 +9,7 @@ import pandas as pd # control dataframe
 import warnings # remove warning log
 #import hanja # translate chinese to korean
 import matplotlib.pyplot as plt # visualize graph
+import torch
 import tensorflow as tf
 from tqdm import tqdm
 from transformers import BertModel, TFBertModel, BertTokenizer, TFRobertaModel, BertTokenizer, AdamWeightDecay
@@ -75,12 +76,12 @@ class TFBertClassifier(tf.keras.Model):
 
 
 class RobertaClassifier(tf.keras.Model):
-    def __init__(self, num_class):
+    def __init__(self, model_name, dir_path, num_class):
         super(RobertaClassifier, self).__init__()
 
-        self.bert = TFRobertaModel.from_pretrained("klue/robeta-large", from_pt=False)
+        self.bert = TFRobertaModel.from_pretrained(model_name, from_pt=True)
         self.dropout = tf.keras.layers.Dropout(self.bert.config.hidden_dropout_prob)
-        self.classifier = tf.keras.layers.Dense(num_class, kernel_initializer=tf.keras.intializers.TruncatedNormal(self.bert.config.initializer_range, seed=42), name="classifier")
+        self.classifier = tf.keras.layers.Dense(num_class, kernel_initializer=tf.keras.initializers.TruncatedNormal(self.bert.config.initializer_range, seed=42), name="classifier")
 
     def call(self, inputs, attention_mask=None, token_type_ids=None, training=False):
         outputs = self.bert(inputs, attention_mask=attention_mask, token_type_ids=token_type_ids)
@@ -91,11 +92,11 @@ class RobertaClassifier(tf.keras.Model):
 
 
 def create_model():
-    model = TFBertClassifier(model_name='bert-base-multilingual-cased', dir_path='exclude/cache', num_class=7)
-    # model = RobertaClassifier(num_class=7)
+    # model = TFBertClassifier(model_name='bert-base-multilingual-cased', dir_path='exclude/cache', num_class=7)
+    model = RobertaClassifier("klue/roberta-large", dir_path='exclude/cache', num_class=7)
     # optimizer = tf.keras.optimizers.Adam(5e-5)
     #optimizer = tf.keras.optimizers.RMSprop(learning_rate=0.001)
-    optimizer = AdamWeightDecay(1e-5, wieght_decay_rate=1e-4)
+    optimizer = AdamWeightDecay(1e-5, weight_decay_rate=1e-4)
     loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
     model.compile(optimizer=optimizer, loss=loss, metrics=['accuracy'])
     return model
@@ -124,13 +125,13 @@ def get_sent_label_from_dataset(train_data, test_data, MAX_LEN, prefix):
                 print("[!] {}".format(train_sent))
                 pass
 
-        train_movie_input_ids = np.array(input_ids, dtype=int)
-        train_movie_attention_masks = np.array(attention_masks, dtype=int)
-        train_movie_type_ids = np.array(token_type_ids, dtype=int)
-        train_movie_inputs = (train_movie_input_ids, train_movie_attention_masks, train_movie_type_ids)
+        train_input_ids = np.array(input_ids, dtype=int)
+        train_attention_masks = np.array(attention_masks, dtype=int)
+        train_type_ids = np.array(token_type_ids, dtype=int)
+        train_inputs = (train_input_ids, train_attention_masks, train_type_ids)
         train_data_labels = np.asarray(train_data_labels, dtype=np.int32) #레이블 토크나이징 리스트
-        print("[*] Sentence: {} / Label: {}".format(len(train_movie_input_ids), len(train_data_labels)))
-        return train_movie_inputs, train_data_labels
+        print("[*] Sentence: {} / Label: {}".format(len(train_input_ids), len(train_data_labels)))
+        return train_inputs, train_data_labels
 
     if prefix == "test":
         #for test_sent in tqdm(zip(test_data["title"])):
@@ -147,12 +148,12 @@ def get_sent_label_from_dataset(train_data, test_data, MAX_LEN, prefix):
                 print('[!] {}'.format(test_sent))
                 pass
 
-        test_movie_input_ids = np.array(input_ids, dtype=int)
-        test_movie_attention_masks = np.array(attention_masks, dtype=int)
-        test_movie_type_ids = np.array(token_type_ids, dtype=int)
-        test_movie_inputs = (test_movie_input_ids, test_movie_attention_masks, test_movie_type_ids)
-        print("[*] Sentence: {} / Label: {}".format(len(test_movie_input_ids), len(test_data_labels)))
-        results = model.predict(test_movie_inputs, batch_size=1024)
+        test_input_ids = np.array(input_ids, dtype=int)
+        test_attention_masks = np.array(attention_masks, dtype=int)
+        test_type_ids = np.array(token_type_ids, dtype=int)
+        test_inputs = (test_input_ids, test_attention_masks, test_type_ids)
+        print("[*] Sentence: {} / Label: {}".format(len(test_input_ids), len(test_data_labels)))
+        results = model.predict(test_inputs, batch_size=1024)
         return results
 
 
@@ -190,7 +191,7 @@ if __name__ == "__main__":
     #tf.random.set_seed(1234)
     #np.random.seed(1234)
 
-    BATCH_SIZE = 64
+    BATCH_SIZE = 4
     NUM_EPOCHS = 30
     VALID_SPLIT = 0.2
     MAX_LEN = 44 # You can get max length using excel function like this --> MAX(LEN(B2:B45655))
@@ -204,7 +205,7 @@ if __name__ == "__main__":
     tokenizer = BertTokenizer.from_pretrained("bert-base-multilingual-cased", cache_dir='exclude/cache', do_lower_case=False)
 
     # 04. Get sentence and label from train dataset    
-    train_movie_inputs, train_data_labels = get_sent_label_from_dataset(train_data, test_data, MAX_LEN, 'train')
+    train_inputs, train_data_labels = get_sent_label_from_dataset(train_data, test_data, MAX_LEN, 'train')
 
     # 05. create model
     model = create_model()
@@ -216,9 +217,9 @@ if __name__ == "__main__":
     cp_callback = ModelCheckpoint(checkpoint_path, monitor='val_accuracy', verbose=True, save_best_only=True, save_weights_only=True)
 
     # 07. training and evaluation
-    history = model.fit(train_movie_inputs, train_data_labels, epochs=NUM_EPOCHS, batch_size=BATCH_SIZE, validation_split = VALID_SPLIT, callbacks=[earlystop_callback, cp_callback])
+    history = model.fit(train_inputs, train_data_labels, epochs=NUM_EPOCHS, batch_size=BATCH_SIZE, validation_split = VALID_SPLIT, callbacks=[earlystop_callback, cp_callback])
 
-    model.load_weights('C:/github/ai-contest/dacon/뉴스 토픽 분류 AI 경진대회/dataset/output/')
+    #model.load_weights('C:/github/ai-contest/dacon/뉴스 토픽 분류 AI 경진대회/dataset/output/')
 
     # 08. Visualize the history as graph
     plot_graphs(history, 'loss')
